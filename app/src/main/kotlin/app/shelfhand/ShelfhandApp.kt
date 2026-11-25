@@ -7,6 +7,11 @@ import app.shelfhand.data.ShelfDb
 class ShelfhandApp : Application() {
     val db: ShelfDb by lazy { ShelfDb.open(this) }
     val library: Library by lazy { Library(this, db) }
+
+    override fun onCreate() {
+        super.onCreate()
+        CrashLog.install(this)
+    }
 }
 
 val android.content.Context.shelf: ShelfhandApp get() = applicationContext as ShelfhandApp

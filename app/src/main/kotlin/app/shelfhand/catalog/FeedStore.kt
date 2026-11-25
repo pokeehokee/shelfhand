@@ -1,11 +1,12 @@
 package app.shelfhand.catalog
 
 import android.content.Context
-import app.shelfhand.core.catalog.CatalogBook
 import app.shelfhand.core.catalog.CatalogDb
 import app.shelfhand.core.catalog.Feeds
-import app.shelfhand.core.catalog.WordPress
+import app.shelfhand.core.catalog.SiteReader
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -14,17 +15,19 @@ import kotlin.coroutines.coroutineContext
 
 /**
  * Sites and feeds the user added by address: RSS, podcast, Atom and OPDS. A page address works when the
- * page lists its feed. Every page the feed links to is read, and a WordPress feed is paged by number,
- * so the phone holds the site's whole archive rather than only its latest entries.
+ * page lists its feed. Every page the feed links to is read, a WordPress feed is paged by number, and a
+ * WordPress site's own listing fills in what the feed leaves out, so the phone holds the whole archive.
+ * What was read is kept even when the site stops answering partway; the outcome says where it stopped.
  */
 class FeedStore(ctx: Context) {
-    private val db = CatalogHolder.get(ctx)
-    private val accept = "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.9, text/html;q=0.8, */*;q=0.5"
+    // Opened on first use, which is always off the main thread.
+    private val db by lazy { CatalogHolder.get(ctx) }
+    private val accept = SiteReader.FEED_ACCEPT + ", text/html;q=0.8"
 
     fun sources(): List<CatalogDb.Source> = db.sources().filter { it.kind == "feed" }
 
-    /** Finds the feed at [address], reads all of it, and returns the source and how many books it gave. */
-    suspend fun add(address: String, progress: (String) -> Unit): Pair<CatalogDb.Source, Int> = withContext(Dispatchers.IO) {
+    /** Finds the feed at [address], reads all of it, and returns the source and how the read went. */
+    suspend fun add(address: String, progress: (String) -> Unit): Pair<CatalogDb.Source, SiteReader.Outcome> = withContext(Dispatchers.IO) {
         val url = normalise(address)
         val first = Http.get(url, accept = accept)
         val (feedUrl, xml) = if (Feeds.looksLikeFeed(first)) url to first else {
@@ -33,66 +36,32 @@ class FeedStore(ctx: Context) {
             found.firstNotNullOfOrNull { f -> runCatching { Http.get(f, accept = accept) }.getOrNull()?.takeIf(Feeds::looksLikeFeed)?.let { f to it } }
                 ?: throw IOException("The page lists a feed, but it didn't load.")
         }
-        val n = readAll(feedUrl, xml, url, progress)
-        sources().first { it.url == feedUrl } to n
+        val o = readAll(feedUrl, xml, url, progress)
+        sources().first { it.url == feedUrl } to o
     }
 
-    /** Re-reads every feed in full. One that fails keeps what it had, and its error is returned. */
+    /** Re-reads every feed in full. One that fails keeps what it had; the returned lines say what went wrong. */
     suspend fun refreshAll(progress: (String) -> Unit): List<String> = withContext(Dispatchers.IO) {
         sources().mapNotNull { s ->
-            runCatching { readAll(s.url, Http.get(s.url, accept = accept), s.addedFrom, progress) }
-                .exceptionOrNull()?.let { "${s.title}: ${it.message ?: it.javaClass.simpleName}" }
+            runCatching { readAll(s.url, Http.get(s.url, accept = accept), s.addedFrom, progress) }.fold(
+                onSuccess = { o -> o.stopped?.let { "${s.title} stopped $it" } },
+                onFailure = { e -> if (e is CancellationException) throw e; "${s.title}: ${e.message ?: e.javaClass.simpleName}" },
+            )
         }
     }
 
     suspend fun remove(id: Long) = withContext(Dispatchers.IO) { db.removeSource(id) }
 
-    private suspend fun readAll(feedUrl: String, firstXml: String, addedFrom: String?, progress: (String) -> Unit): Int {
-        val first = Feeds.parsePage(firstXml, feedUrl)
-        val wordpress = Feeds.isWordPress(firstXml)
-        val items = LinkedHashMap<String, CatalogBook>()
-        first.items.forEach { items[it.id] = it }
-        var next = first.next ?: if (wordpress) Feeds.pagedUrl(feedUrl, 2) else null
-        var pageNo = 1
-        val seen = mutableSetOf(feedUrl)
-        while (next != null && pageNo < MAX_PAGES && seen.add(next)) {
-            coroutineContext.ensureActive()
-            val xml = try { Http.get(next, accept = accept) } catch (e: Http.Status) { break } // WordPress answers 404 past the last page
-            if (!Feeds.looksLikeFeed(xml)) break
-            val page = Feeds.parsePage(xml, next)
-            val before = items.size
-            page.items.forEach { items.putIfAbsent(it.id, it) }
-            pageNo++
-            progress("${first.title}: page $pageNo, ${items.size} entries")
-            if (items.size == before) break // a site that ignores the page number sends page one again
-            next = page.next ?: if (wordpress) Feeds.pagedUrl(feedUrl, pageNo + 1) else null
-        }
-        var books = first.finish(items.values.toList())
-        // A WordPress feed that would not page: try the site's public posts listing, which pages by design.
-        if (wordpress && pageNo == 1) wordpressListing(feedUrl, first.title, progress)?.let { if (it.size > books.size) books = it }
-        if (books.isEmpty()) throw IOException("The feed loaded but has no items.")
-        val src = db.upsertSource(feedUrl, first.title.ifBlank { URL(feedUrl).host }, "feed", addedFrom)
-        books.chunked(500).forEach { db.put(src, it) }
-        return books.size
-    }
-
-    private suspend fun wordpressListing(siteUrl: String, title: String, progress: (String) -> Unit): List<CatalogBook>? {
-        val out = LinkedHashMap<String, CatalogBook>()
-        var page = 1
-        while (page <= MAX_PAGES) {
-            coroutineContext.ensureActive()
-            val url = WordPress.postsUrl(siteUrl, page) ?: return null
-            val json = try { Http.get(url, accept = "application/json") } catch (e: IOException) { break }
-            val posts = WordPress.parse(json, siteUrl, title)
-            if (posts.isEmpty()) break
-            val before = out.size
-            posts.forEach { out.putIfAbsent(it.id, it) }
-            if (out.size == before) break
-            progress("$title: ${out.size} posts")
-            if (posts.size < WordPress.PER_PAGE) break
-            page++
-        }
-        return out.values.toList().ifEmpty { null }
+    private suspend fun readAll(feedUrl: String, firstXml: String, addedFrom: String?, progress: (String) -> Unit): SiteReader.Outcome {
+        val job = coroutineContext[Job]
+        val net = SiteReader.Net(fetch = { u, a -> Http.get(u, accept = a) }, pause = { Thread.sleep(PAUSE_MS) }, active = { job?.isActive != false })
+        val o = SiteReader.read(feedUrl, firstXml, net, progress)
+        coroutineContext.ensureActive()
+        if (o.books.isEmpty()) throw IOException("The feed loaded but has no items.")
+        progress("${o.title}: saving ${"%,d".format(o.books.size)} entries")
+        val src = db.upsertSource(feedUrl, o.title.ifBlank { URL(feedUrl).host }, "feed", addedFrom)
+        o.books.chunked(500).forEach { db.put(src, it) }
+        return o
     }
 
     private fun normalise(address: String): String {
@@ -103,5 +72,6 @@ class FeedStore(ctx: Context) {
         return withScheme
     }
 
-    private companion object { const val MAX_PAGES = 2000 }
+    // A third of a second between pages: fast enough for a big archive, slow enough not to trip a site's rate limit.
+    private companion object { const val PAUSE_MS = 350L }
 }

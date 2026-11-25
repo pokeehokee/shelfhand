@@ -71,7 +71,7 @@ class WordPressTest {
     @Test fun `past the last page and odd addresses give nothing`() {
         assertTrue(WordPress.parse("""{"code":"rest_post_invalid_page_number"}""", "https://w.example/", "W").isEmpty())
         assertNull(WordPress.postsUrl("ftp://w.example/", 1))
-        assertEquals("https://w.example/wp-json/wp/v2/posts?per_page=100&page=3&_embed=wp:term&_fields=id,link,date,title,excerpt,content,_links,_embedded",
+        assertEquals("https://w.example/wp-json/wp/v2/posts?per_page=100&page=3&_embed=wp:term&_fields=id,guid,link,date,title,excerpt,content,_links,_embedded",
             WordPress.postsUrl("https://w.example/books/feed/", 3))
     }
 }

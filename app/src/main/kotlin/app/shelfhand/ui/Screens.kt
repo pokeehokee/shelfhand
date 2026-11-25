@@ -58,6 +58,7 @@ import kotlinx.coroutines.delay
 fun ShelfhandRoot(model: PlayerModel, find: FindModel, onPickFolder: () -> Unit) {
     MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
         var tab by remember { mutableStateOf(0) }
+        var crashReports by remember { mutableStateOf(false) }
         val upNext by model.upNext.collectAsState()
         Scaffold(bottomBar = {
             NavigationBar {
@@ -67,25 +68,28 @@ fun ShelfhandRoot(model: PlayerModel, find: FindModel, onPickFolder: () -> Unit)
             }
         }) { pad ->
             Column(Modifier.padding(pad).fillMaxSize()) {
+                CrashBanner(onOpenReports = { crashReports = true })
                 when (tab) {
-                    0 -> LibraryScreen(model, onPickFolder, onOpen = { model.open(it); tab = 1 })
+                    0 -> LibraryScreen(model, onPickFolder, onOpen = { model.open(it); tab = 1 }, onCrashReports = { crashReports = true })
                     1 -> PlayerScreen(model)
                     else -> FindScreen(find)
                 }
             }
         }
         if (upNext.isNotEmpty()) UpNextDialog(upNext, onPick = { model.open(it); tab = 1 }, onDismiss = model::dismissUpNext)
+        if (crashReports) CrashReportsDialog(onClose = { crashReports = false })
     }
 }
 
 @Composable
-fun LibraryScreen(model: PlayerModel, onPickFolder: () -> Unit, onOpen: (Long) -> Unit) {
+fun LibraryScreen(model: PlayerModel, onPickFolder: () -> Unit, onOpen: (Long) -> Unit, onCrashReports: () -> Unit = {}) {
     val books by model.books.collectAsState()
     val msg by model.scanMessage.collectAsState()
     Column(Modifier.padding(16.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onPickFolder) { Text(if (model.library.rootUri == null) "Choose audiobook folder" else "Change folder") }
             if (model.library.rootUri != null) OutlinedButton(onClick = { model.scan() }) { Text("Rescan") }
+            TextButton(onClick = onCrashReports) { Text("Crash reports") }
         }
         msg?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }
         Spacer(Modifier.height(8.dp))
