@@ -23,15 +23,26 @@ class HttpError(val code: Int, val retryAfterSeconds: Long? = null) : IOExceptio
  * where and why it stopped, so the user hears "stopped at page 37" rather than a short list with no reason.
  */
 object SiteReader {
-    data class Outcome(val title: String, val books: List<CatalogBook>, val pages: Int, val stopped: String?)
+    /** [fromMap] counts the entries only the site's map listed, each read from its own page. */
+    data class Outcome(val title: String, val books: List<CatalogBook>, val pages: Int, val stopped: String?, val fromMap: Int = 0)
 
     /** [fetch] takes an address and an Accept header. [pause] runs between requests, to stay polite. */
     class Net(val fetch: (String, String) -> String, val pause: () -> Unit, val active: () -> Boolean = { true })
 
     const val FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.5"
     const val MAX_PAGES = 5000
+    /** Pages read one by one from a site's map in a single pass; the next update carries on from there. */
+    const val MAP_PAGES_PER_READ = 1000
 
-    fun read(feedUrl: String, firstXml: String, net: Net, progress: (String) -> Unit): Outcome {
+    /**
+     * [site] is the page the user typed, when it was a page rather than the feed itself. [known] holds the
+     * page addresses (see [Sitemaps.key]) the phone already has from this source, so a later update reads
+     * only what is new in the site's map.
+     */
+    fun read(
+        feedUrl: String, firstXml: String, net: Net,
+        site: String? = null, known: Set<String> = emptySet(), progress: (String) -> Unit,
+    ): Outcome {
         val first = Feeds.parsePage(firstXml, feedUrl)
         val title = first.title
         var wordpress = Feeds.isWordPress(firstXml)
@@ -85,8 +96,84 @@ object SiteReader {
             }
             books = books + extra
         }
-        return Outcome(title, books, pageNo, stopped)
+
+        // The site's map, for what both of the above missed. Only for the feed's own site: a podcast host's
+        // map lists every show it hosts, not this one's episodes.
+        var fromMap = 0
+        val mapSite = when {
+            types != null || wordpress -> feedUrl
+            site != null && Sitemaps.host(site) == Sitemaps.host(feedUrl) -> site
+            else -> null
+        }
+        if (mapSite != null && net.active()) {
+            val have = HashSet(known).apply { books.forEach { b -> b.pageUrl?.let { add(Sitemaps.key(it)) } } }
+            val ids = books.mapTo(HashSet()) { it.id }
+            val r = fromSitemap(mapSite, feedUrl, title, have, net, progress)
+            val added = r.books.filter { ids.add(it.id) }
+            fromMap = added.size
+            books = books + added
+            if (r.stop != null && stopped == null) stopped = r.stop
+        }
+        return Outcome(title, books, pageNo, stopped, fromMap)
     }
+
+    /** Reads the site's map and then each listed page the phone doesn't have yet, up to [MAP_PAGES_PER_READ]. */
+    private fun fromSitemap(siteUrl: String, feedUrl: String, title: String, have: Set<String>, net: Net, progress: (String) -> Unit): Listing {
+        val siteHost = Sitemaps.host(siteUrl) ?: return Listing(emptyList(), null, reachable = false)
+        val entries = sitemapEntries(siteUrl, net)
+        if (entries.isEmpty()) return Listing(emptyList(), null, reachable = false)
+        val missing = entries.filter { Sitemaps.isPage(it.url, siteHost) && Sitemaps.key(it.url) !in have }
+            .distinctBy { Sitemaps.key(it.url) }
+        val out = mutableListOf<CatalogBook>()
+        var failures = 0
+        for ((i, e) in missing.withIndex()) {
+            if (!net.active()) return Listing(out, "cancelled")
+            if (i >= MAP_PAGES_PER_READ) return Listing(out, "with ${"%,d".format(missing.size - i)} more site-map pages still to read")
+            net.pause()
+            val html = try { net.fetch(e.url, "text/html,application/xhtml+xml") } catch (x: HttpError) {
+                if (x.code in setOf(404, 410, 401, 403)) continue // gone or private: not an entry
+                if (++failures >= 3) return Listing(out, "at site-map page ${i + 1}: ${x.message}")
+                continue
+            } catch (x: java.io.IOException) {
+                if (++failures >= 3) return Listing(out, "at site-map page ${i + 1}: ${x.message ?: "no answer"}")
+                continue
+            }
+            failures = 0
+            Sitemaps.book(html, e.url, "feed:$feedUrl", title, e.posts)?.let { out += it }
+            if ((i + 1) % 10 == 0 || i + 1 == missing.size)
+                progress("$title: reading pages from the site map, ${"%,d".format(i + 1)} of ${"%,d".format(missing.size)}")
+        }
+        return Listing(out, null)
+    }
+
+    /** Every page address in the site's map, following an index into its maps of posts and custom types. */
+    private fun sitemapEntries(siteUrl: String, net: Net): List<Sitemaps.Entry> {
+        val origin = Sitemaps.origin(siteUrl) ?: return emptyList()
+        val fromRobots = try { Sitemaps.fromRobots(net.fetch("$origin/robots.txt", "text/plain"), siteUrl) } catch (e: java.io.IOException) { emptyList() }
+        for (root in (fromRobots + Sitemaps.candidates(siteUrl)).distinct()) {
+            if (!net.active()) return emptyList()
+            val xml = try { net.pause(); net.fetch(root, Sitemaps.ACCEPT) } catch (e: java.io.IOException) { continue }
+            val top = Sitemaps.parse(xml)
+            if (top.maps.isEmpty() && top.pages.isEmpty()) continue
+            val out = top.pages.map { Sitemaps.Entry(it, posts = false) }.toMutableList()
+            val queue = ArrayDeque(top.maps.filter(Sitemaps::wanted).map { it to 1 })
+            val seen = mutableSetOf(root)
+            var maps = 0
+            while (queue.isNotEmpty() && maps < MAX_MAPS && net.active()) {
+                val (m, depth) = queue.removeFirst()
+                if (!seen.add(m)) continue
+                maps++
+                val inner = try { net.pause(); Sitemaps.parse(net.fetch(m, Sitemaps.ACCEPT)) } catch (e: java.io.IOException) { continue }
+                val posts = Sitemaps.isPostMap(m)
+                inner.pages.forEach { out += Sitemaps.Entry(it, posts) }
+                if (depth < 3) inner.maps.filter(Sitemaps::wanted).forEach { queue.addLast(it to depth + 1) }
+            }
+            return out
+        }
+        return emptyList()
+    }
+
+    private const val MAX_MAPS = 300
 
     /** [reachable] is false when the type's listing refused its first page, so it says nothing about the site. */
     private class Listing(val books: List<CatalogBook>, val stop: String?, val reachable: Boolean = true)
@@ -132,6 +219,7 @@ object SiteReader {
     fun summary(o: Outcome): String = buildString {
         append("${"%,d".format(o.books.size)} ${if (o.books.size == 1) "entry" else "entries"}")
         if (o.pages > 1) append(" from ${"%,d".format(o.pages)} feed pages")
+        if (o.fromMap > 0) append(", ${"%,d".format(o.fromMap)} of them found through the site map")
         o.stopped?.let { append(". It stopped $it, so some may be missing; Update all feeds tries again and keeps what's here") }
     }
 }

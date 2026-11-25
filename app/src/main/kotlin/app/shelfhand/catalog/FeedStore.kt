@@ -55,7 +55,10 @@ class FeedStore(ctx: Context) {
     private suspend fun readAll(feedUrl: String, firstXml: String, addedFrom: String?, progress: (String) -> Unit): SiteReader.Outcome {
         val job = coroutineContext[Job]
         val net = SiteReader.Net(fetch = { u, a -> Http.get(u, accept = a) }, pause = { Thread.sleep(PAUSE_MS) }, active = { job?.isActive != false })
-        val o = SiteReader.read(feedUrl, firstXml, net, progress)
+        // The page the user typed, when it wasn't the feed, is the site whose map is read; what the phone
+        // already holds from this source is skipped, so each update reads only new pages from the map.
+        val site = addedFrom?.takeIf { it != feedUrl }
+        val o = SiteReader.read(feedUrl, firstXml, net, site = site, known = db.pageKeys(feedUrl), progress = progress)
         coroutineContext.ensureActive()
         if (o.books.isEmpty()) throw IOException("The feed loaded but has no items.")
         progress("${o.title}: saving ${"%,d".format(o.books.size)} entries")
