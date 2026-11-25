@@ -34,7 +34,7 @@ class LibriVoxParseTest {
     @Test fun `a zero or missing length is unknown, and json null is not the word null`() {
         val b = LibriVox.parse(page)[1]
         assertNull(b.seconds)
-        assertNull(b.zipUrl)
+        assertNull(b.downloadUrl)
         assertNull(b.description)
     }
 
@@ -101,7 +101,7 @@ class CatalogFilterTest {
 
     @Test fun `the cache round-trips every field`() {
         val full = CatalogBook("librivox", "9", "T", listOf("A B", "C D"), "English", listOf("G1", "G2"), 100, 3, 1900,
-            "https://p", "https://z", "line one\nline two")
+            "https://p", "https://z", "line one\nline two", "magnet:?xt=urn:btih:abc", "Jane's Stories", "https://f/rss")
         val back = CatalogCache.read(CatalogCache.write(books + full))
         assertEquals(books + full.copy(description = "line one line two"), back)
     }

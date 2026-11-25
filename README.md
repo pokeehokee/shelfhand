@@ -10,6 +10,7 @@ An Android audiobook player that keeps its own library. Design: see the Shelfhan
 - **Finished.** Recorded when playback reaches the last 2% (or last minute), or when you tap Mark finished. When a book ends, an Up next dialog offers the next book in the series, then books in progress.
 
 - **Find tab**: the whole LibriVox catalog on the phone, filtered by length, series or standalone, genres combined (all/any) or excluded, and language, sorted by title, author, length or newest.
+- **Your own sources**: paste any site, podcast, RSS, Atom or OPDS address and its books join Find with the same filters, plus a Source filter. A page address works when the page lists its feed. A serialized book posted as a podcast reads as one book with its full length. Magnet and .torrent links open in your torrent app.
 
 ## Not yet
 

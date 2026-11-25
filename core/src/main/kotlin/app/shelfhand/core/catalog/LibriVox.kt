@@ -47,8 +47,9 @@ object LibriVox {
             sections = o.s("num_sections")?.toIntOrNull()?.takeIf { it > 0 },
             year = o.s("copyright_year")?.toIntOrNull()?.takeIf { it in 1000..2100 },
             pageUrl = o.s("url_librivox").ifBlank { null },
-            zipUrl = o.s("url_zip_file").ifBlank { null },
+            downloadUrl = o.s("url_zip_file").ifBlank { null },
             description = o.s("description").ifBlank { null }?.let(::stripTags),
+            collection = "LibriVox",
         )
     }
 
@@ -67,34 +68,39 @@ object LibriVox {
         .replace("&#039;", "'").replace(Regex("\\s+"), " ").trim()
 }
 
-/** A compact line-per-book cache, so the app does not re-download the catalog to start up. */
+/** A compact line-per-book cache, so the app does not re-download a catalog to start up. */
 object CatalogCache {
     private const val SEP = '\u001f'
     private const val LIST = '\u001e'
+    private const val VERSION = "v2"
+    private const val FIELDS = 15
 
     fun write(books: List<CatalogBook>): String = buildString {
-        append("v1\n")
+        append(VERSION).append('\n')
         books.forEach { b ->
             append(listOf(
                 b.source, b.id, b.title, b.authors.joinToString(LIST.toString()), b.language ?: "",
                 b.genres.joinToString(LIST.toString()), b.seconds?.toString() ?: "", b.sections?.toString() ?: "",
-                b.year?.toString() ?: "", b.pageUrl ?: "", b.zipUrl ?: "", b.description ?: "",
-            ).joinToString(SEP.toString()) { it.replace('\n', ' ').replace(SEP, ' ') })
+                b.year?.toString() ?: "", b.pageUrl ?: "", b.downloadUrl ?: "", b.description ?: "",
+                b.torrentUrl ?: "", b.collection ?: "", b.feedUrl ?: "",
+            ).joinToString(SEP.toString()) { it.replace('\n', ' ').replace('\r', ' ').replace(SEP, ' ') })
             append('\n')
         }
     }
 
+    /** An older or damaged cache reads as empty, which means "download again", never a crash. */
     fun read(text: String): List<CatalogBook> {
         val lines = text.lineSequence().toList()
-        if (lines.firstOrNull() != "v1") return emptyList()
+        if (lines.firstOrNull() != VERSION) return emptyList()
         return lines.drop(1).filter { it.isNotEmpty() }.mapNotNull { line ->
             val f = line.split(SEP)
-            if (f.size < 12) return@mapNotNull null
+            if (f.size < FIELDS) return@mapNotNull null
             fun list(s: String) = if (s.isEmpty()) emptyList() else s.split(LIST)
             CatalogBook(
                 source = f[0], id = f[1], title = f[2], authors = list(f[3]), language = f[4].ifEmpty { null },
                 genres = list(f[5]), seconds = f[6].toLongOrNull(), sections = f[7].toIntOrNull(), year = f[8].toIntOrNull(),
-                pageUrl = f[9].ifEmpty { null }, zipUrl = f[10].ifEmpty { null }, description = f[11].ifEmpty { null },
+                pageUrl = f[9].ifEmpty { null }, downloadUrl = f[10].ifEmpty { null }, description = f[11].ifEmpty { null },
+                torrentUrl = f[12].ifEmpty { null }, collection = f[13].ifEmpty { null }, feedUrl = f[14].ifEmpty { null },
             )
         }
     }

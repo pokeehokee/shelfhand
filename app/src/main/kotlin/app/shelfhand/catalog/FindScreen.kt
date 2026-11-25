@@ -65,19 +65,49 @@ fun FindScreen(model: FindModel) {
     var allGenres by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf<String?>(null) }
+    val sources by model.sources.collectAsState()
+    val sourceStatus by model.sourceStatus.collectAsState()
+    var showSources by remember { mutableStateOf(false) }
+    var address by remember { mutableStateOf("") }
 
     LazyColumn(Modifier.padding(horizontal = 16.dp)) {
         item {
             Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (all.isEmpty()) {
-                    Text("Search every free LibriVox audiobook with filters the site does not have: length, series or standalone, and genres combined.",
+                    Text("Search free audiobooks with filters the sites do not have: length, series or standalone, and genres combined. " +
+                        "Start with the LibriVox catalog, or add any site's feed below.",
                         style = MaterialTheme.typography.bodyMedium)
-                    Button(onClick = model::refresh) { Text("Download the catalog") }
+                    Button(onClick = model::refresh) { Text("Download the LibriVox catalog") }
+                    status?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 } else Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(status ?: "", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    Text(status ?: "LibriVox not downloaded", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                     TextButton(onClick = model::refresh) { Text("Update") }
                 }
-                if (all.isEmpty()) status?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (sources.isEmpty()) "Your sites and feeds" else "Your sites and feeds (${sources.size})",
+                        style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { showSources = !showSources }) { Text(if (showSources) "Hide" else "Add or manage") }
+                }
+                if (showSources) {
+                    Text("Paste a site, podcast, RSS, Atom or OPDS address. For a web page, Shelfhand uses the feed the page lists.",
+                        style = MaterialTheme.typography.labelSmall)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(value = address, onValueChange = { address = it }, singleLine = true,
+                            label = { Text("Address") }, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { model.addSource(address) { address = "" } }) { Text("Add") }
+                    }
+                    sources.forEach { src ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(src.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(src.feedUrl, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            TextButton(onClick = { model.removeSource(src) }) { Text("Remove") }
+                        }
+                    }
+                    if (sources.isNotEmpty()) TextButton(onClick = model::refreshSources) { Text("Update all feeds") }
+                }
+                sourceStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
         }
         if (all.isNotEmpty()) item {
@@ -92,6 +122,17 @@ fun FindScreen(model: FindModel) {
                     TextButton(onClick = { showFilters = !showFilters }) { Text(if (showFilters) "Hide filters" else "Filters") }
                 }
                 if (showFilters) {
+                    val collections = all.mapNotNull { it.collection }.groupingBy { it }.eachCount().toList().sortedByDescending { it.second }
+                    if (collections.size > 1) {
+                        Label("Source")
+                        ChipRow {
+                            FilterChip(selected = f.collections.isEmpty(), onClick = { model.update { it.copy(collections = emptySet()) } }, label = { Text("All") })
+                            collections.forEach { (c, n) ->
+                                FilterChip(selected = c in f.collections,
+                                    onClick = { model.update { it.copy(collections = it.collections.toggle(c)) } }, label = { Text("$c $n") })
+                            }
+                        }
+                    }
                     Label("Length")
                     ChipRow {
                         BANDS.forEach { b ->
@@ -146,7 +187,8 @@ fun FindScreen(model: FindModel) {
             }
         }
         items(results.take(500), key = { it.source + it.id }) { b ->
-            Result(b, expanded = open == b.id, onClick = { open = if (open == b.id) null else b.id })
+            val k = b.source + b.id
+            Result(b, expanded = open == k, onClick = { open = if (open == k) null else k })
             HorizontalDivider()
         }
         if (results.size > 500) item {
@@ -183,6 +225,7 @@ private fun ChipRow(content: @Composable () -> Unit) {
 
 private fun <T> Set<T>.toggle(v: T) = if (v in this) this - v else this + v
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Result(b: CatalogBook, expanded: Boolean, onClick: () -> Unit) {
     val ctx = LocalContext.current
@@ -199,11 +242,19 @@ private fun Result(b: CatalogBook, expanded: Boolean, onClick: () -> Unit) {
             b.description?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }
             val meta = listOfNotNull(b.language, b.sections?.let { "$it parts" }, b.year?.let { "first published $it" }).joinToString(" · ")
             if (meta.isNotEmpty()) Text(meta, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
-            if (b.series != null) Text("Series is guessed from the title; LibriVox does not record it.", style = MaterialTheme.typography.labelSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
-                b.zipUrl?.let { u -> Button(onClick = { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u))) }) { Text("Download") } }
-                b.pageUrl?.let { u -> OutlinedButton(onClick = { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u))) }) { Text("Open on LibriVox") } }
+            b.collection?.let { Text("From $it", style = MaterialTheme.typography.labelSmall) }
+            if (b.series != null) Text("Series is guessed from the title; the source does not record it.", style = MaterialTheme.typography.labelSmall)
+            var problem by remember { mutableStateOf<String?>(null) }
+            fun open(u: String, none: String) {
+                problem = runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u))) }.exceptionOrNull()?.let { none }
             }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
+                b.torrentUrl?.let { u -> Button(onClick = { open(u, "No torrent app on this phone can open it.") }) { Text("Get torrent") } }
+                b.downloadUrl?.let { u -> Button(onClick = { open(u, "No app on this phone can open the download.") }) { Text("Download") } }
+                b.feedUrl?.let { u -> OutlinedButton(onClick = { open(u, "No podcast or browser app can open the feed.") }) { Text("Open feed") } }
+                b.pageUrl?.let { u -> OutlinedButton(onClick = { open(u, "No browser can open the page.") }) { Text("Open page") } }
+            }
+            problem?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
         }
     }
 }

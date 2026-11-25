@@ -15,8 +15,15 @@ data class CatalogBook(
     val sections: Int?,
     val year: Int?,
     val pageUrl: String?,
-    val zipUrl: String?,
+    /** A direct download: a zip of the book, or one audio file. */
+    val downloadUrl: String?,
     val description: String?,
+    /** A magnet link or a .torrent address, handed to a torrent app. */
+    val torrentUrl: String? = null,
+    /** The feed or catalog this came from, by its own name ("LibriVox", "Jane Doe's Stories"). */
+    val collection: String? = null,
+    /** For a whole serialized book read from a podcast-style feed: the feed to subscribe to. */
+    val feedUrl: String? = null,
 ) {
     /** Guessed from the title, because no free catalog we read records series. */
     val series: SeriesGuess? by lazy { SeriesGuess.of(title) }
@@ -67,6 +74,8 @@ data class Filter(
     val genreMatch: GenreMatch = GenreMatch.ANY,
     val excludeGenres: Set<String> = emptySet(),
     val series: SeriesFilter = SeriesFilter.ANY,
+    /** Which sources to show; empty means all of them. */
+    val collections: Set<String> = emptySet(),
     val sort: Sort = Sort.TITLE,
 )
 
@@ -77,13 +86,14 @@ object CatalogFilter {
         val out = books.filter { b ->
             (words.isEmpty() || words.all { w ->
                 b.title.lowercase().contains(w) || b.authors.any { it.lowercase().contains(w) } ||
-                    b.genres.any { it.lowercase().contains(w) }
+                    b.genres.any { it.lowercase().contains(w) } || b.collection?.lowercase()?.contains(w) == true
             }) &&
+                (f.collections.isEmpty() || b.collection in f.collections) &&
                 // A book of unknown length is dropped once any length bound is set: we cannot say it fits.
                 (!lengthSet || (b.seconds != null &&
                     (f.minSeconds == null || b.seconds >= f.minSeconds) &&
                     (f.maxSeconds == null || b.seconds <= f.maxSeconds))) &&
-                (f.languages.isEmpty() || b.language in f.languages) &&
+                (f.languages.isEmpty() || b.language == null || b.language in f.languages) &&
                 (f.genres.isEmpty() || when (f.genreMatch) {
                     GenreMatch.ANY -> b.genres.any { it in f.genres }
                     GenreMatch.ALL -> b.genres.containsAll(f.genres)
