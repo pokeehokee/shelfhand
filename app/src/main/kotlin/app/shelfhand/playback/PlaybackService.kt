@@ -10,6 +10,7 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
+import app.shelfhand.CrashLog
 import app.shelfhand.core.Listening
 import app.shelfhand.core.SleepTimer
 import app.shelfhand.core.Timeline
@@ -18,6 +19,7 @@ import app.shelfhand.data.VerdictEntity
 import app.shelfhand.shelf
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,7 +34,9 @@ import kotlinx.coroutines.launch
  * pause and on chapter change. Owns "finished": recorded when playback reaches the book's tail.
  */
 class PlaybackService : MediaSessionService() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // A failed save is logged, not fatal: losing one position write must not stop playback.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate +
+        CoroutineExceptionHandler { _, e -> CrashLog.record(this, "Playback", e) })
     private lateinit var player: ExoPlayer
     private var session: MediaSession? = null
 
