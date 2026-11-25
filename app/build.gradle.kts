@@ -51,5 +51,7 @@ dependencies {
     ksp(libs.room.compiler)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.session)
+    implementation(libs.sqlite.bundled)
+    implementation(libs.work.runtime)
     testImplementation(libs.junit)
 }

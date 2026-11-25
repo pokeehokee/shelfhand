@@ -14,6 +14,13 @@ import javax.xml.parsers.DocumentBuilderFactory
 object Feeds {
     data class Feed(val title: String, val books: List<CatalogBook>)
 
+    /**
+     * One page of a feed. [next] is the feed's own next-page link (RFC 5005 / OPDS `rel="next"`), when it
+     * has one. [finish] turns the items of every page together into books, because a serialized book
+     * posted as a podcast can only be recognised once all its episodes are in.
+     */
+    class Page(val title: String, val items: List<CatalogBook>, val next: String?, val finish: (List<CatalogBook>) -> List<CatalogBook>)
+
     /** True when the text looks like a feed rather than a web page. */
     fun looksLikeFeed(text: String): Boolean {
         val head = text.trimStart().take(2000).lowercase()
@@ -42,12 +49,29 @@ object Feeds {
             ?.let { m -> (m.groupValues[1].ifEmpty { m.groupValues[2] }.ifEmpty { m.groupValues[3] }).let(::unescape) }
 
     fun resolve(base: String, href: String): String? = runCatching {
-        val u = URI(base).resolve(href.trim())
+        val h = href.trim()
+        // java.net.URI follows RFC 2396 here and drops the path for a bare "?query"; RFC 3986 keeps it.
+        val u = if (h.startsWith("?")) URI(base.substringBefore('#').substringBefore('?') + h) else URI(base).resolve(h)
         u.toString().takeIf { u.scheme == "http" || u.scheme == "https" }
     }.getOrNull()
 
-    /** Reads a feed. A feed whose items are the chapters of one book becomes one entry for the whole book. */
-    fun parse(xml: String, feedUrl: String): Feed {
+    /** True for a feed WordPress generated, which pages with `?paged=N` even when it says nothing about it. */
+    fun isWordPress(xml: String): Boolean =
+        Regex("""<generator[^>]*>[^<]*wordpress\.org""", RegexOption.IGNORE_CASE).containsMatchIn(xml.take(8000)) ||
+            Regex("""<generator[^>]*uri="https?://wordpress\.org""", RegexOption.IGNORE_CASE).containsMatchIn(xml.take(8000))
+
+    /** The feed address with its `paged` query set to [n]. */
+    fun pagedUrl(feedUrl: String, n: Int): String {
+        val base = feedUrl.substringBefore('#')
+        val query = base.substringAfter('?', "").split('&').filter { it.isNotEmpty() && !it.startsWith("paged=") }
+        return base.substringBefore('?') + "?" + (query + "paged=$n").joinToString("&")
+    }
+
+    /** Reads a one-page feed. A feed whose items are the chapters of one book becomes one entry for the whole book. */
+    fun parse(xml: String, feedUrl: String): Feed = parsePage(xml, feedUrl).let { Feed(it.title, it.finish(it.items)) }
+
+    /** Reads one page of a feed, leaving the items as they are; see [Page]. */
+    fun parsePage(xml: String, feedUrl: String): Page {
         val f = DocumentBuilderFactory.newInstance().apply {
             isNamespaceAware = true
             isExpandEntityReferences = false
@@ -65,7 +89,11 @@ object Feeds {
         }
     }
 
-    private fun rss(root: Element, source: String, feedUrl: String): Feed {
+    private fun nextLink(parent: Element, feedUrl: String): String? =
+        parent.children("link").firstOrNull { it.getAttribute("rel").equals("next", ignoreCase = true) }
+            ?.getAttribute("href")?.ifBlank { null }?.let { resolve(feedUrl, it) }
+
+    private fun rss(root: Element, source: String, feedUrl: String): Page {
         val channel = root.child("channel") ?: root
         val title = channel.text("title") ?: host(feedUrl)
         val lang = channel.text("language")?.let(::languageName)
@@ -98,10 +126,13 @@ object Feeds {
                 collection = title,
             )
         }
-        return Feed(title, maybeOneBook(title, items, channel.text("type"), chAuthor, lang, chCats, channel.text("description")?.let(::plain), channel.text("link"), feedUrl, source))
+        val type = channel.text("type")
+        val desc = channel.text("description")?.let(::plain)
+        val site = channel.children("link").firstOrNull { it.namespaceURI.isNullOrEmpty() }?.textContent?.trim()?.ifBlank { null }
+        return Page(title, items, nextLink(channel, feedUrl)) { all -> maybeOneBook(title, all, type, chAuthor, lang, chCats, desc, site, feedUrl, source) }
     }
 
-    private fun atom(root: Element, source: String, feedUrl: String): Feed {
+    private fun atom(root: Element, source: String, feedUrl: String): Page {
         val title = root.text("title") ?: host(feedUrl)
         val feedAuthor = root.child("author")?.text("name")
         val items = root.children("entry").mapNotNull { e ->
@@ -130,7 +161,7 @@ object Feeds {
                 collection = title,
             )
         }
-        return Feed(title, items)
+        return Page(title, items, nextLink(root, feedUrl)) { it }
     }
 
     /**
@@ -193,8 +224,18 @@ object Feeds {
 
     private fun plain(s: String) = unescape(s.replace(Regex("<[^>]+>"), " ")).replace(Regex("\\s+"), " ").trim().ifBlank { null }
 
-    private fun unescape(s: String) = s.replace("&amp;", "&").replace("&quot;", "\"").replace("&#039;", "'")
-        .replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", " ")
+    private fun unescape(s: String) = s
+        .replace(Regex("&#(x[0-9a-fA-F]+|[0-9]+);")) { m ->
+            val v = m.groupValues[1]
+            val cp = if (v.startsWith("x")) v.substring(1).toIntOrNull(16) else v.toIntOrNull()
+            if (cp != null && Character.isValidCodePoint(cp)) String(Character.toChars(cp)) else m.value
+        }
+        .replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", " ")
+        .replace("&hellip;", "…").replace("&amp;", "&")
+
+    /** HTML reduced to plain text, entities decoded; empty when nothing is left. */
+    fun plainText(s: String): String = plain(s) ?: ""
+    fun unescapeText(s: String): String = unescape(s)
 
     // Namespace-blind lookups: feeds mix itunes:, media:, dc:, torrent: and plain names freely.
     private fun Element.children(name: String): List<Element> {

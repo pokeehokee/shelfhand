@@ -24,9 +24,15 @@ data class CatalogBook(
     val collection: String? = null,
     /** For a whole serialized book read from a podcast-style feed: the feed to subscribe to. */
     val feedUrl: String? = null,
+    /** A series some source actually recorded (Open Library); null means guess from the title. */
+    val knownSeries: SeriesGuess? = null,
+    /** Fields filled in by the background lookup rather than stated by the source: "series", "year". */
+    val lookedUp: Set<String> = emptySet(),
+    /** The row in the on-phone catalog, for loading the long description on demand. */
+    val dbId: Long? = null,
 ) {
-    /** Guessed from the title, because no free catalog we read records series. */
-    val series: SeriesGuess? by lazy { SeriesGuess.of(title) }
+    /** What a source recorded, else guessed from the title, because most free catalogs do not record series. */
+    val series: SeriesGuess? by lazy { knownSeries ?: SeriesGuess.of(title) }
 }
 
 data class SeriesGuess(val name: String, val index: Double?) {
@@ -63,7 +69,8 @@ data class SeriesGuess(val name: String, val index: Double?) {
 
 enum class SeriesFilter { ANY, SERIES_ONLY, STANDALONE_ONLY }
 enum class GenreMatch { ANY, ALL }
-enum class Sort { TITLE, SHORTEST, LONGEST, NEWEST_ADDED, AUTHOR }
+enum class Sort { TITLE, SHORTEST, LONGEST, NEWEST_ADDED, AUTHOR, OLDEST_WORK, NEWEST_WORK }
+enum class Access { ANY, DOWNLOAD, TORRENT }
 
 data class Filter(
     val text: String = "",
@@ -76,52 +83,7 @@ data class Filter(
     val series: SeriesFilter = SeriesFilter.ANY,
     /** Which sources to show; empty means all of them. */
     val collections: Set<String> = emptySet(),
+    /** Only books that can be downloaded directly, or only those with a torrent. */
+    val access: Access = Access.ANY,
     val sort: Sort = Sort.TITLE,
 )
-
-object CatalogFilter {
-    fun apply(books: List<CatalogBook>, f: Filter): List<CatalogBook> {
-        val words = f.text.lowercase().split(' ').filter { it.isNotBlank() }
-        val lengthSet = f.minSeconds != null || f.maxSeconds != null
-        val out = books.filter { b ->
-            (words.isEmpty() || words.all { w ->
-                b.title.lowercase().contains(w) || b.authors.any { it.lowercase().contains(w) } ||
-                    b.genres.any { it.lowercase().contains(w) } || b.collection?.lowercase()?.contains(w) == true
-            }) &&
-                (f.collections.isEmpty() || b.collection in f.collections) &&
-                // A book of unknown length is dropped once any length bound is set: we cannot say it fits.
-                (!lengthSet || (b.seconds != null &&
-                    (f.minSeconds == null || b.seconds >= f.minSeconds) &&
-                    (f.maxSeconds == null || b.seconds <= f.maxSeconds))) &&
-                (f.languages.isEmpty() || b.language == null || b.language in f.languages) &&
-                (f.genres.isEmpty() || when (f.genreMatch) {
-                    GenreMatch.ANY -> b.genres.any { it in f.genres }
-                    GenreMatch.ALL -> b.genres.containsAll(f.genres)
-                }) &&
-                b.genres.none { it in f.excludeGenres } &&
-                when (f.series) {
-                    SeriesFilter.ANY -> true
-                    SeriesFilter.SERIES_ONLY -> b.series != null
-                    SeriesFilter.STANDALONE_ONLY -> b.series == null
-                }
-        }
-        return when (f.sort) {
-            Sort.TITLE -> out.sortedBy { it.title.lowercase().removePrefix("the ") }
-            Sort.AUTHOR -> out.sortedBy { it.authors.firstOrNull()?.substringAfterLast(' ')?.lowercase() ?: "￿" }
-            // Unknown lengths go last in both directions.
-            Sort.SHORTEST -> out.sortedWith(compareBy(nullsLast()) { it.seconds })
-            Sort.LONGEST -> out.sortedWith(compareBy<CatalogBook, Long?>(nullsLast(reverseOrder())) { it.seconds })
-            Sort.NEWEST_ADDED -> out.sortedByDescending { it.id.toLongOrNull() ?: 0L }
-        }
-    }
-
-    /** Genre names with how many books carry each, most common first, for the filter chips. */
-    fun genreCounts(books: List<CatalogBook>): List<Pair<String, Int>> =
-        books.flatMap { it.genres }.groupingBy { it }.eachCount().entries
-            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
-            .map { it.key to it.value }
-
-    fun languageCounts(books: List<CatalogBook>): List<Pair<String, Int>> =
-        books.mapNotNull { it.language }.groupingBy { it }.eachCount().entries
-            .sortedByDescending { it.value }.map { it.key to it.value }
-}

@@ -96,11 +96,3 @@ class FeedsTest {
         assertTrue(runCatching { Feeds.parse(evil, "https://e.example/") }.isFailure)
     }
 }
-
-class UnknownLanguageTest {
-    @Test fun `a feed that doesn't state its language is not hidden by a language filter`() {
-        val b = CatalogBook(source = "feed:x", id = "1", title = "T", authors = emptyList(), language = null, genres = emptyList(),
-            seconds = null, sections = null, year = null, pageUrl = null, downloadUrl = null, description = null)
-        assertEquals(1, CatalogFilter.apply(listOf(b), Filter(languages = setOf("English"))).size)
-    }
-}

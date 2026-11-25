@@ -63,41 +63,8 @@ class SeriesGuessTest {
     }
 }
 
-class CatalogFilterTest {
-    private fun b(id: String, title: String, sec: Long?, genres: List<String> = emptyList(), lang: String = "English", author: String = "A Writer") =
-        CatalogBook("t", id, title, listOf(author), lang, genres, sec, null, null, null, null, null)
-
-    private val books = listOf(
-        b("1", "Short Mystery", 2 * 3600L, listOf("Mystery")),
-        b("2", "Long Mystery Romance", 20 * 3600L, listOf("Mystery", "Romance")),
-        b("3", "Unknown Length", null, listOf("Mystery")),
-        b("4", "Barsoom, Volume 3", 9 * 3600L, listOf("Science Fiction")),
-        b("5", "Le Roman", 5 * 3600L, listOf("Romance"), lang = "French"),
-    )
-
-    @Test fun `length bounds drop books of unknown length`() {
-        val r = CatalogFilter.apply(books, Filter(minSeconds = 3 * 3600L, maxSeconds = 10 * 3600L))
-        assertEquals(listOf("4", "5"), r.map { it.id }.sorted())
-    }
-
-    @Test fun `genres combine with all or any, and can be excluded`() {
-        assertEquals(listOf("2"), CatalogFilter.apply(books, Filter(genres = setOf("Mystery", "Romance"), genreMatch = GenreMatch.ALL)).map { it.id })
-        assertEquals(4, CatalogFilter.apply(books, Filter(genres = setOf("Mystery", "Romance"))).size)
-        assertEquals(listOf("1", "3"), CatalogFilter.apply(books, Filter(genres = setOf("Mystery"), excludeGenres = setOf("Romance"))).map { it.id }.sorted())
-    }
-
-    @Test fun `series only and standalone only split the catalog`() {
-        assertEquals(listOf("4"), CatalogFilter.apply(books, Filter(series = SeriesFilter.SERIES_ONLY)).map { it.id })
-        assertEquals(4, CatalogFilter.apply(books, Filter(series = SeriesFilter.STANDALONE_ONLY)).size)
-    }
-
-    @Test fun `text matches every word, language narrows, unknown lengths sort last both ways`() {
-        assertEquals(listOf("2"), CatalogFilter.apply(books, Filter(text = "mystery romance")).map { it.id })
-        assertEquals(listOf("5"), CatalogFilter.apply(books, Filter(languages = setOf("French"))).map { it.id })
-        assertEquals("3", CatalogFilter.apply(books, Filter(sort = Sort.SHORTEST)).last().id)
-        assertEquals("3", CatalogFilter.apply(books, Filter(sort = Sort.LONGEST)).last().id)
-        assertEquals("2", CatalogFilter.apply(books, Filter(sort = Sort.LONGEST)).first().id)
-    }
+class CatalogCacheTest {
+    private val books = listOf(CatalogBook("t", "1", "Short Mystery", listOf("A Writer"), "English", listOf("Mystery"), 7200, null, null, null, null, null))
 
     @Test fun `the cache round-trips every field`() {
         val full = CatalogBook("librivox", "9", "T", listOf("A B", "C D"), "English", listOf("G1", "G2"), 100, 3, 1900,

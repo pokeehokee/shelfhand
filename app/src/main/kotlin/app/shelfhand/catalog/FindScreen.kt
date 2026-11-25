@@ -25,6 +25,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.shelfhand.core.catalog.Access
 import app.shelfhand.core.catalog.CatalogBook
 import app.shelfhand.core.catalog.GenreMatch
 import app.shelfhand.core.catalog.SeriesFilter
@@ -55,8 +57,11 @@ private val BANDS = listOf(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FindScreen(model: FindModel) {
-    val all by model.all.collectAsState()
+    val size by model.catalogSize.collectAsState()
     val results by model.results.collectAsState()
+    val total by model.total.collectAsState()
+    val collections by model.collections.collectAsState()
+    val lookupStatus by model.lookupStatus.collectAsState()
     val f by model.filter.collectAsState()
     val status by model.status.collectAsState()
     val genres by model.genres.collectAsState()
@@ -73,7 +78,7 @@ fun FindScreen(model: FindModel) {
     LazyColumn(Modifier.padding(horizontal = 16.dp)) {
         item {
             Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (all.isEmpty()) {
+                if (size == 0) {
                     Text("Search free audiobooks with filters the sites do not have: length, series or standalone, and genres combined. " +
                         "Start with the LibriVox catalog, or add any site's feed below.",
                         style = MaterialTheme.typography.bodyMedium)
@@ -100,7 +105,7 @@ fun FindScreen(model: FindModel) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(src.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(src.feedUrl, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${"%,d".format(src.items)} entries · ${src.url}", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             TextButton(onClick = { model.removeSource(src) }) { Text("Remove") }
                         }
@@ -110,19 +115,18 @@ fun FindScreen(model: FindModel) {
                 sourceStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
         }
-        if (all.isNotEmpty()) item {
+        if (size > 0) item {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(
                     value = f.text, onValueChange = { t -> model.update { it.copy(text = t) } },
                     label = { Text("Title, author or genre") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("${"%,d".format(results.size)} match", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    Text("${"%,d".format(total)} match", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                     SortMenu(sortMenu, { sortMenu = it }, f.sort) { s -> model.update { it.copy(sort = s) } }
                     TextButton(onClick = { showFilters = !showFilters }) { Text(if (showFilters) "Hide filters" else "Filters") }
                 }
                 if (showFilters) {
-                    val collections = all.mapNotNull { it.collection }.groupingBy { it }.eachCount().toList().sortedByDescending { it.second }
                     if (collections.size > 1) {
                         Label("Source")
                         ChipRow {
@@ -132,6 +136,11 @@ fun FindScreen(model: FindModel) {
                                     onClick = { model.update { it.copy(collections = it.collections.toggle(c)) } }, label = { Text("$c $n") })
                             }
                         }
+                    }
+                    Label("Get it as")
+                    ChipRow {
+                        listOf(Access.ANY to "Any", Access.DOWNLOAD to "Direct download", Access.TORRENT to "Torrent")
+                            .forEach { (v, l) -> FilterChip(selected = f.access == v, onClick = { model.update { it.copy(access = v) } }, label = { Text(l) }) }
                     }
                     Label("Length")
                     ChipRow {
@@ -181,18 +190,24 @@ fun FindScreen(model: FindModel) {
                             )
                         }
                     }
+                    lookupStatus?.let { s ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(s, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f))
+                            TextButton(onClick = model::lookUpNow) { Text("Look up now") }
+                        }
+                    }
                     if (genres.size > 24) TextButton(onClick = { allGenres = !allGenres }) { Text(if (allGenres) "Fewer genres" else "All ${genres.size} genres") }
                 }
                 HorizontalDivider()
             }
         }
-        items(results.take(500), key = { it.source + it.id }) { b ->
+        items(results, key = { it.source + it.id }) { b ->
             val k = b.source + b.id
-            Result(b, expanded = open == k, onClick = { open = if (open == k) null else k })
+            Result(b, model, expanded = open == k, onClick = { open = if (open == k) null else k })
             HorizontalDivider()
         }
-        if (results.size > 500) item {
-            Text("Showing the first 500. Narrow the filters to see the rest.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 12.dp))
+        if (total > results.size) item {
+            Text("Showing the first ${results.size}. Narrow the filters to see the rest.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 12.dp))
         }
     }
 }
@@ -212,7 +227,9 @@ private fun sortLabel(s: Sort) = when (s) {
     Sort.AUTHOR -> "Author"
     Sort.SHORTEST -> "Shortest"
     Sort.LONGEST -> "Longest"
-    Sort.NEWEST_ADDED -> "Newest"
+    Sort.NEWEST_ADDED -> "Newest added"
+    Sort.OLDEST_WORK -> "Oldest work"
+    Sort.NEWEST_WORK -> "Newest work"
 }
 
 @Composable
@@ -227,8 +244,15 @@ private fun <T> Set<T>.toggle(v: T) = if (v in this) this - v else this + v
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Result(b: CatalogBook, expanded: Boolean, onClick: () -> Unit) {
+private fun Result(b: CatalogBook, model: FindModel, expanded: Boolean, onClick: () -> Unit) {
     val ctx = LocalContext.current
+    // The long description and the looked-up genres are read only once the row is opened.
+    var description by remember(b.dbId) { mutableStateOf<String?>(null) }
+    var genreMarks by remember(b.dbId) { mutableStateOf<List<Pair<String, Boolean>>?>(null) }
+    if (expanded) LaunchedEffect(b.dbId) {
+        description = model.description(b) ?: b.description
+        genreMarks = model.genresOf(b)
+    }
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp)) {
         Text(b.title, style = MaterialTheme.typography.titleMedium, maxLines = if (expanded) 4 else 1, overflow = TextOverflow.Ellipsis)
         val line = listOfNotNull(
@@ -239,11 +263,16 @@ private fun Result(b: CatalogBook, expanded: Boolean, onClick: () -> Unit) {
         Text(line, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (b.genres.isNotEmpty()) Text(b.genres.joinToString(", "), style = MaterialTheme.typography.labelSmall, maxLines = if (expanded) 3 else 1, overflow = TextOverflow.Ellipsis)
         if (expanded) {
-            b.description?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }
-            val meta = listOfNotNull(b.language, b.sections?.let { "$it parts" }, b.year?.let { "first published $it" }).joinToString(" · ")
+            description?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }
+            genreMarks?.filter { it.second }?.takeIf { it.isNotEmpty() }?.let { g ->
+                Text("Subjects from Open Library: " + g.joinToString(", ") { it.first }, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
+            }
+            val meta = listOfNotNull(b.language, b.sections?.let { "$it parts" },
+                b.year?.let { "first published $it" + if ("year" in b.lookedUp) " (Open Library)" else "" }).joinToString(" · ")
             if (meta.isNotEmpty()) Text(meta, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
             b.collection?.let { Text("From $it", style = MaterialTheme.typography.labelSmall) }
-            if (b.series != null) Text("Series is guessed from the title; the source does not record it.", style = MaterialTheme.typography.labelSmall)
+            if (b.series != null) Text(if ("series" in b.lookedUp) "Series from Open Library." else "Series is guessed from the title; the source does not record it.",
+                style = MaterialTheme.typography.labelSmall)
             var problem by remember { mutableStateOf<String?>(null) }
             fun open(u: String, none: String) {
                 problem = runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u))) }.exceptionOrNull()?.let { none }
