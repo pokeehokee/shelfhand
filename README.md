@@ -9,6 +9,8 @@ An Android audiobook player that keeps its own library. Design: see the Shelfhan
 - **Resume.** Position saved every 10 s, on pause and on chapter change; the app reopens where you stopped. Steps back a little on resume, more the longer you were away.
 - **Finished.** Recorded when playback reaches the last 2% (or last minute), or when you tap Mark finished. When a book ends, an Up next dialog offers the next book in the series, then books in progress.
 
+- **Find tab**: the whole LibriVox catalog on the phone, filtered by length, series or standalone, genres combined (all/any) or excluded, and language, sorted by title, author, length or newest.
+
 ## Not yet
 
 - Chapters inside a single `.m4b` (it plays as one chapter for now).

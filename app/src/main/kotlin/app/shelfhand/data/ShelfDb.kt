@@ -80,6 +80,12 @@ interface ShelfDao {
     @Query("DELETE FROM ChapterEntity WHERE bookId = :id") suspend fun clearChapters(id: Long)
     @Upsert suspend fun upsertChapters(c: List<ChapterEntity>)
     @Query("UPDATE BookEntity SET present = 0 WHERE folderUri NOT IN (:seen)") suspend fun markMissing(seen: List<String>)
+    @Query("SELECT * FROM ChapterEntity WHERE durationMs IS NULL ORDER BY bookId, idx") suspend fun chaptersWithoutLength(): List<ChapterEntity>
+    @Query("UPDATE ChapterEntity SET durationMs = :ms WHERE bookId = :bookId AND idx = :idx") suspend fun setChapterLength(bookId: Long, idx: Int, ms: Long)
+    /** The book's length is known only once every file's is; a partial sum would read as a short book. */
+    @Query("""UPDATE BookEntity SET totalMs = (SELECT CASE WHEN COUNT(*) = COUNT(durationMs) THEN SUM(durationMs) END
+              FROM ChapterEntity WHERE bookId = :bookId) WHERE id = :bookId""")
+    suspend fun refreshBookLength(bookId: Long)
 
     @Transaction
     suspend fun replaceChapters(bookId: Long, c: List<ChapterEntity>) { clearChapters(bookId); upsertChapters(c) }

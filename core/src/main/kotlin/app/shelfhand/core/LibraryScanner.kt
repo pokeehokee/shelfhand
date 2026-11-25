@@ -12,7 +12,13 @@ interface FileNode {
  * Walks a library root and returns one book per folder that directly holds audio files.
  * A folder holding only subfolders ("Author/") is a container, not a book.
  */
-class LibraryScanner(private val durationOf: (FileNode) -> Long?) {
+class LibraryScanner(
+    /** Called after each folder with (folders read, books found), so a long scan shows it is moving. */
+    private val progress: (Int, Int) -> Unit = { _, _ -> },
+    private val durationOf: (FileNode) -> Long? = { null },
+) {
+    private var folders = 0
+
 
     fun scan(root: FileNode): List<ScannedBook> {
         val out = mutableListOf<ScannedBook>()
@@ -31,6 +37,7 @@ class LibraryScanner(private val durationOf: (FileNode) -> Long?) {
                 coverUri = kids.firstOrNull { !it.isDirectory && isCover(it.name) }?.uri,
             )
         }
+        progress(++folders, out.size)
         kids.filter { it.isDirectory }.forEach { walk(it, path + it.name, out) }
     }
 

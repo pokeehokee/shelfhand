@@ -139,3 +139,21 @@ class UpNextTest {
         assertEquals(3L, UpNext.after(done, shelf).first().id)
     }
 }
+
+class ScanProgressTest {
+    private class N(override val name: String, val kids: List<N> = emptyList(), val dir: Boolean = kids.isNotEmpty()) : FileNode {
+        override val uri get() = name
+        override val isDirectory get() = dir
+        override fun children() = kids
+    }
+
+    @Test fun `reports every folder and the books found so far, and reads no lengths unless asked`() {
+        val root = N("root", listOf(N("Author", listOf(N("Book A", listOf(N("1.mp3"))), N("Book B", listOf(N("1.mp3")))))))
+        val seen = mutableListOf<Pair<Int, Int>>()
+        val books = LibraryScanner(progress = { f, b -> seen += f to b }).scan(root)
+        assertEquals(2, books.size)
+        assertEquals(4, seen.size)
+        assertEquals(2, seen.maxOf { it.second })
+        assertTrue(books.all { b -> b.files.all { it.durationMs == null } })
+    }
+}

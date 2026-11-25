@@ -49,11 +49,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.shelfhand.catalog.FindModel
+import app.shelfhand.catalog.FindScreen
 import app.shelfhand.data.BookRow
 import kotlinx.coroutines.delay
 
 @Composable
-fun ShelfhandRoot(model: PlayerModel, onPickFolder: () -> Unit) {
+fun ShelfhandRoot(model: PlayerModel, find: FindModel, onPickFolder: () -> Unit) {
     MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
         var tab by remember { mutableStateOf(0) }
         val upNext by model.upNext.collectAsState()
@@ -61,11 +63,15 @@ fun ShelfhandRoot(model: PlayerModel, onPickFolder: () -> Unit) {
             NavigationBar {
                 NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Text("📚") }, label = { Text("Library") })
                 NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Text("▶") }, label = { Text("Player") })
+                NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = { Text("🔎") }, label = { Text("Find") })
             }
         }) { pad ->
             Column(Modifier.padding(pad).fillMaxSize()) {
-                if (tab == 0) LibraryScreen(model, onPickFolder, onOpen = { model.open(it); tab = 1 })
-                else PlayerScreen(model)
+                when (tab) {
+                    0 -> LibraryScreen(model, onPickFolder, onOpen = { model.open(it); tab = 1 })
+                    1 -> PlayerScreen(model)
+                    else -> FindScreen(find)
+                }
             }
         }
         if (upNext.isNotEmpty()) UpNextDialog(upNext, onPick = { model.open(it); tab = 1 }, onDismiss = model::dismissUpNext)

@@ -23,6 +23,8 @@ import app.shelfhand.data.Library
 import app.shelfhand.data.VerdictEntity
 import app.shelfhand.playback.PlaybackService
 import app.shelfhand.shelf
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -61,6 +63,8 @@ class PlayerModel(app: Application) : AndroidViewModel(app) {
     private var controller: MediaController? = null
 
     init {
+        if (library.rootUri != null && !library.hasAccess())
+            scanMessage.value = "Shelfhand lost access to your audiobook folder. Choose it again."
         viewModelScope.launch {
             val token = SessionToken(app, ComponentName(app, PlaybackService::class.java))
             val c = MediaController.Builder(app, token).buildAsync().await()
@@ -84,12 +88,36 @@ class PlayerModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
-    fun scan() = viewModelScope.launch {
-        scanMessage.value = "Scanning..."
-        val r = library.scan()
-        scanMessage.value = buildString {
-            append("${r.books} books, ${r.added} new")
-            if (r.unknownDuration > 0) append(", ${r.unknownDuration} with unreadable lengths")
+    private var scanJob: Job? = null
+
+    /** Folder walk first, so books appear in seconds; then each file's length, which is the slow part. */
+    fun scan() {
+        if (scanJob?.isActive == true) return
+        scanJob = viewModelScope.launch {
+            scanMessage.value = "Reading folders..."
+            val r = try {
+                library.scan { scanMessage.value = it }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SecurityException) {
+                scanMessage.value = e.message ?: "Shelfhand lost access to that folder. Choose it again."; return@launch
+            } catch (e: Exception) {
+                scanMessage.value = "The scan stopped: ${e.message ?: e.javaClass.simpleName}"; return@launch
+            }
+            if (r.books == 0) {
+                scanMessage.value = "No audiobooks found in that folder. Choose the folder that holds your book folders, or the books themselves."
+                return@launch
+            }
+            val found = "${r.books} books, ${r.added} new"
+            scanMessage.value = found
+            val unreadable = try {
+                library.readLengths { done, total -> scanMessage.value = "$found. Reading lengths: $done of $total files" }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                scanMessage.value = "$found. Stopped reading lengths: ${e.message ?: e.javaClass.simpleName}"; return@launch
+            }
+            scanMessage.value = if (unreadable > 0) "$found. $unreadable files have no readable length." else found
         }
     }
 

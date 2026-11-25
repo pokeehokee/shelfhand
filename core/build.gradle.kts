@@ -2,6 +2,9 @@ plugins { alias(libs.plugins.kotlin.jvm) }
 java { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
 dependencies {
+    // Android ships org.json; the JVM tests need their own copy.
+    compileOnly(libs.json)
+    testImplementation(libs.json)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit)
 }
