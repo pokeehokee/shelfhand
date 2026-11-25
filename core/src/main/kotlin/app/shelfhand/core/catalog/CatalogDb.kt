@@ -125,6 +125,12 @@ class CatalogDb(private val db: Sql, private val now: () -> Long = System::curre
 
     // ---- reading ----
 
+    /** The page addresses already held for the source at [url], as [Sitemaps.key]s. */
+    fun pageKeys(url: String): Set<String> =
+        db.query("SELECT i.page_url FROM item i JOIN source s ON s.id = i.source_id WHERE s.url = ? AND i.page_url IS NOT NULL", listOf(url)) {
+            Sitemaps.key(it.string(0)!!)
+        }.toHashSet()
+
     /** The long description, read only when the user opens a title. */
     fun description(itemId: Long): String? =
         db.query("SELECT description FROM detail WHERE item_id = ?", listOf(itemId)) { it.string(0) }.firstOrNull()

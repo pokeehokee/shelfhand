@@ -201,8 +201,10 @@ fun FindScreen(model: FindModel) {
                 HorizontalDivider()
             }
         }
-        items(results, key = { it.source + it.id }) { b ->
-            val k = b.source + b.id
+        // The database row id is unique; source and id run together ("db:1"+"23" and "db:12"+"3") were not,
+        // and a repeated key closes the app.
+        items(results, key = { it.dbId ?: (it.source + "\u0000" + it.id) }) { b ->
+            val k = b.dbId?.toString() ?: (b.source + "\u0000" + b.id)
             Result(b, model, expanded = open == k, onClick = { open = if (open == k) null else k })
             HorizontalDivider()
         }

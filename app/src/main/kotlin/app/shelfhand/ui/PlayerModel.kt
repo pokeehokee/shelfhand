@@ -12,6 +12,7 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
+import app.shelfhand.CrashLog
 import app.shelfhand.core.BookIdentity
 import app.shelfhand.core.Listening
 import app.shelfhand.core.ShelfBook
@@ -24,6 +25,7 @@ import app.shelfhand.data.VerdictEntity
 import app.shelfhand.playback.PlaybackService
 import app.shelfhand.shelf
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -62,10 +64,16 @@ class PlayerModel(app: Application) : AndroidViewModel(app) {
 
     private var controller: MediaController? = null
 
+    /** A failure in the player shows as a line and goes in the crash reports, rather than closing the app. */
+    private val guard = CoroutineExceptionHandler { _, e ->
+        CrashLog.record(app, "Player", e)
+        scanMessage.value = "The player hit a problem: ${e.message ?: e.javaClass.simpleName}"
+    }
+
     init {
         if (library.rootUri != null && !library.hasAccess())
             scanMessage.value = "Shelfhand lost access to your audiobook folder. Choose it again."
-        viewModelScope.launch {
+        viewModelScope.launch(guard) {
             val token = SessionToken(app, ComponentName(app, PlaybackService::class.java))
             val c = MediaController.Builder(app, token).buildAsync().await()
             controller = c
@@ -93,7 +101,7 @@ class PlayerModel(app: Application) : AndroidViewModel(app) {
     /** Folder walk first, so books appear in seconds; then each file's length, which is the slow part. */
     fun scan() {
         if (scanJob?.isActive == true) return
-        scanJob = viewModelScope.launch {
+        scanJob = viewModelScope.launch(guard) {
             scanMessage.value = "Reading folders..."
             val r = try {
                 library.scan { scanMessage.value = it }
@@ -121,7 +129,7 @@ class PlayerModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun open(bookId: Long, play: Boolean = true) = viewModelScope.launch {
+    fun open(bookId: Long, play: Boolean = true) = viewModelScope.launch(guard) {
         val c = controller ?: return@launch
         val b = dao.book(bookId) ?: return@launch
         val chapters = dao.chapters(bookId)
@@ -157,7 +165,7 @@ class PlayerModel(app: Application) : AndroidViewModel(app) {
     fun speed(s: Float) { controller?.setPlaybackSpeed(Listening.clampSpeed(s)) }
 
     /** minutes > 0 countdown, 0 off, -1 end of chapter, -2 add five minutes. */
-    fun sleep(minutes: Int) = viewModelScope.launch {
+    fun sleep(minutes: Int) = viewModelScope.launch(guard) {
         val c = controller ?: return@launch
         val r = c.sendCustomCommand(
             SessionCommand(PlaybackService.CMD_SLEEP, Bundle.EMPTY),
@@ -169,7 +177,7 @@ class PlayerModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    fun markFinished(bookId: Long, finished: Boolean) = viewModelScope.launch {
+    fun markFinished(bookId: Long, finished: Boolean) = viewModelScope.launch(guard) {
         if (finished) dao.upsertVerdict(VerdictEntity(bookId, "FINISHED", inferred = false, at = System.currentTimeMillis()))
         else dao.clearVerdict(bookId)
     }

@@ -9,7 +9,8 @@ import kotlin.coroutines.coroutineContext
 
 /** Downloads the whole LibriVox catalog into the on-phone database, a page at a time. */
 class CatalogStore(ctx: Context) {
-    private val db = CatalogHolder.get(ctx)
+    // Opened on first use, which is always off the main thread.
+    private val db by lazy { CatalogHolder.get(ctx) }
 
     val updatedAt: Long? get() = db.sources().firstOrNull { it.kind == "librivox" }?.updatedAt
     val count: Int get() = db.sources().firstOrNull { it.kind == "librivox" }?.items ?: 0

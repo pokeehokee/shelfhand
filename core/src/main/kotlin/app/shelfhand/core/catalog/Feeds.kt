@@ -41,7 +41,10 @@ object Feeds {
             val href = attr(tag, "href") ?: return@mapNotNull null
             if (("alternate" in rel || "opds" in rel) && types.any { type.startsWith(it) } && !type.contains("json"))
                 resolve(pageUrl, href) else null
-        }.distinct().toList()
+        }.distinct()
+            // A WordPress page also lists its comments feed; that is never the catalog, so try it last.
+            .sortedBy { if (Regex("""/comments/feed|[?&]feed=comments""", RegexOption.IGNORE_CASE).containsMatchIn(it)) 1 else 0 }
+            .toList()
     }
 
     private fun attr(tag: String, name: String): String? =
@@ -177,6 +180,9 @@ object Feeds {
         val chapterish = items.count { CHAPTER.containsMatchIn(it.title) }
         val serial = type.equals("serial", ignoreCase = true)
         if (!serial && chapterish * 2 < items.size) return items
+        // Titles alone are not enough: a site's catalog of "Book Name, Part 2" posts is many books, not one.
+        // Without the feed saying it is serial, every chapter must also be its own audio file.
+        if (!serial && items.count { it.downloadUrl != null } * 10 < items.size * 9) return items
         if (items.any { it.torrentUrl != null }) return items // a torrent feed lists whole books, whatever the titles say
         val secs = items.map { it.seconds }
         return listOf(CatalogBook(
