@@ -1,0 +1,35 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Core tests (library scan, path parsing, listening rules, sleep timer, up next)
+        run: ./gradlew --no-daemon :core:test
+      - name: Build APK
+        run: ./gradlew --no-daemon :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shelfhand-apk
+          retention-days: 14
+          path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish APK as a pre-release (default branch only)
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          n=$((100 + $(git rev-list --count HEAD)))
+          cp app/build/outputs/apk/debug/app-debug.apk shelfhand-$n.apk
+          gh release view "build-$n" >/dev/null 2>&1 && exit 0
+          gh release create "build-$n" shelfhand-$n.apk --prerelease --title "Build $n" --notes "Automated build of $(git rev-parse --short HEAD)"
